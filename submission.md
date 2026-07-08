@@ -177,4 +177,32 @@ honestly rather than forcing a fix for a bug I can't trigger.
 
 ## Root Cause Analysis Entries
 
-_(Filled in one at a time during Milestone 3, each committed separately.)_
+### Issue #1 — My listening streak keeps resetting
+
+**How I reproduced it.** Called `update_listening_streak(user, now)` directly with a fabricated
+user: `last_listened_at` = Saturday 2026-07-11, `listening_streak` = 12, `now` = Sunday
+2026-07-12. Result: streak dropped to **1** instead of 13. Repeating with `now` = a Monday gave the
+correct 13, which isolated the trigger to Sundays — exactly matching kenji's "both times it was a
+Sunday".
+
+**How I found the root cause.** Started at the route `GET /users/<id>/streak`
+(`routes/users.py`) → `streak_service.get_streak()`, which just reads a stored column, so the value
+must be set earlier. The write path is `POST /songs/<id>/listen` → `record_listening_event()` →
+`update_listening_streak()`. Reading that function, the consecutive-day branch was
+`elif days_since_last == 1 and today.weekday() != 6:`. The `today.weekday() != 6` clause stood out
+because the docstring's rules say nothing about the day of the week. I confirmed with a one-liner
+that `datetime.weekday()` returns **6 for Sunday**, so that clause is false only on Sundays.
+
+**The root cause.** Python's `datetime.weekday()` uses Monday=0 … Sunday=6. The increment branch
+required `days_since_last == 1 AND today.weekday() != 6`, so on any day that is a Sunday the
+"listened yesterday" case failed its guard and execution fell through to the `else`, which resets
+the streak to 1. There was no legitimate reason for the day-of-week condition — it silently threw
+away the streak whenever the daily listen happened on a Sunday.
+
+**My fix and side-effect check.** Removed the `and today.weekday() != 6` clause so the branch is
+simply `elif days_since_last == 1:`. Verified all branches on both sides of the boundary: Sat→Sun
+now gives 13, Sun→Mon gives 13, Fri→Sat gives 6, same-day (Sun→Sun) stays unchanged, a 2-day skip
+still resets to 1, and a first-ever listen still starts at 1. No other code reads `weekday()`, and
+`get_streak` is untouched, so nothing else is affected.
+
+_Fix commit: `fix: increment streak on Sundays instead of resetting it`_
