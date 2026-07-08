@@ -268,3 +268,35 @@ previously returned 0), and an empty playlist still returns 0 with no error. No 
 `get_playlist_songs`, and the ordering/query logic was left unchanged.
 
 _Fix commit: `fix: return every playlist song instead of dropping the last`_
+
+### Issue #2 — "Friends Listening Now" shows people from yesterday
+
+**How I reproduced it.** Gave darius a single listening event 23 hours ago (calendar day
+2026-07-07) and no newer one, then called `get_friends_listening_now(nova.id)` at wall-clock
+2026-07-08 05:58 UTC. darius still appeared, because his 23h-old play was inside the rolling window.
+This matches nova's report of a friend whose last listen was 11pm the night before still showing at
+9am.
+
+**How I found the root cause.** Followed `GET /feed/<id>/listening-now` (`routes/feed.py`) →
+`feed_service.get_friends_listening_now()`. The query filters `ListeningEvent.listened_at >= cutoff`,
+and `cutoff = datetime.now(timezone.utc) - RECENT_THRESHOLD` where `RECENT_THRESHOLD =
+timedelta(hours=24)`. That defines "recent" as "within the last 24 hours from this instant" — a
+rolling window — rather than "today". An event from 11pm last night is only ~10 hours old at 9am, so
+it passes the filter; it only falls out 24 hours after it happened, i.e. at 11pm tonight — exactly
+the "hangs around until the same time next day" behavior nova described.
+
+**The root cause.** The feed used a rolling 24-hour cutoff instead of a calendar-day cutoff. The
+requirement (and the feed's name, "listening *now* / today") is to show only friends who listened
+**today**, but `now - 24h` reaches back into the previous calendar day for most of the morning and
+afternoon, so yesterday-evening plays leak into today's feed.
+
+**My fix and side-effect check.** Replaced the rolling cutoff with the start of the current calendar
+day (UTC): `cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)`,
+and removed the now-meaningless `RECENT_THRESHOLD` constant (and its unused `timedelta` import).
+Verified on both sides of the midnight boundary: a friend who listened 23h ago (yesterday) is now
+excluded, while friends who listened today are still shown. Confirmed `get_activity_feed` — which is
+intentionally *not* date-filtered — is unaffected and still returns events, and that no other code
+referenced `RECENT_THRESHOLD`. (Uses UTC calendar days, consistent with how the rest of the app
+stores and compares timestamps.)
+
+_Fix commit: `fix: scope listening-now feed to today, not a rolling 24h window`_
