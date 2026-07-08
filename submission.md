@@ -206,3 +206,37 @@ still resets to 1, and a first-ever listen still starts at 1. No other code read
 `get_streak` is untouched, so nothing else is affected.
 
 _Fix commit: `fix: increment streak on Sundays instead of resetting it`_
+
+### Issue #4 — Notified when a friend adds my song to a playlist, but not when they rate it
+
+**How I reproduced it.** Counted `Notification` rows for a song's sharer (simone) before and after
+calling `rate_song(kenji, "Crown Heights Anthem", 5)`. The rating row was saved (score = 5) but the
+sharer's notification count stayed at **0 → 0**, and no notification of any type appeared. The
+working case (`add_to_playlist`) did create one, matching aaliya's "playlist add notifies, rating
+doesn't".
+
+**How I found the root cause.** Followed `POST /songs/<id>/rate` (`routes/songs.py`) →
+`notification_service.rate_song()`. Both `rate_song` and `add_to_playlist` live in the same file,
+so I compared them line by line, as the brief hinted. `add_to_playlist` ends with a guarded
+`create_notification(...)` call targeting `song.shared_by`. `rate_song` saves the rating, commits,
+and immediately `return rating` — there is no `create_notification` call anywhere in it. That was
+the moment it was clearly the cause: the notification step doesn't exist, rather than existing but
+misfiring.
+
+**The root cause.** This is an architectural omission, not a typo. Notifications in Mixtape are only
+created when a service function explicitly calls `create_notification`. `add_to_playlist` does this;
+`rate_song` never did. So ratings persisted correctly (visible on the song) while the sharer was
+never told, because the code path that would have created the notification was simply absent.
+
+**My fix and side-effect check.** Added the same guarded notification block used by
+`add_to_playlist`, placed right after the rating is committed in `rate_song`: if
+`song.shared_by != user_id`, create a `"song_rated"` notification with body
+`"{rater.username} rated your song '{song.title}' {score} stars."`. Verified: a friend rating now
+produces exactly one `song_rated` notification with the correct body; a sharer rating their **own**
+song produces none (the guard mirrors the playlist one); re-rating updates the score without adding
+a duplicate `Rating` row (the model's `UniqueConstraint` still holds) — and `add_to_playlist`'s own
+notification path is untouched and still fires. (Note: I separately observed a pre-existing,
+unrelated crash when `add_to_playlist` appends a brand-new song — the `playlist_entries.position`
+column is never set — but that is outside the five listed issues and I left it alone.)
+
+_Fix commit: `fix: notify the sharer when their song is rated`_
