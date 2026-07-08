@@ -122,13 +122,56 @@ Eight tables — five entity models and three association tables:
 
 ## Bug Selection
 
-Read all five issues before choosing. Planned picks (≥3 required):
+Read all five issues before choosing. After the Milestone-2 reproduction pass:
 
-- **Issue #1 — streak resets on Sunday** (`streak_service.py`)
-- **Issue #4 — no notification on rating** (`notification_service.py`)
-- **Issue #5 — last playlist song hidden** (`playlist_service.py`)
-- Stretch: **Issue #2 — feed shows yesterday** (`feed_service.py`) and
-  **Issue #3 — duplicate search results** (`search_service.py`).
+- **Issue #1 — streak resets on Sunday** (`streak_service.py`) ✅ reproduced
+- **Issue #4 — no notification on rating** (`notification_service.py`) ✅ reproduced
+- **Issue #5 — last playlist song hidden** (`playlist_service.py`) ✅ reproduced
+- **Issue #2 — feed shows yesterday** (`feed_service.py`) ✅ reproduced (4th / stretch)
+- **Issue #3 — duplicate search results** (`search_service.py`) ⚠️ **does not reproduce** in this
+  environment (see reproduction log) — kept as an optional latent-fix candidate.
+
+---
+
+## Milestone 2 — Reproduction Log
+
+Reproduced each bug **before** touching code, using a throwaway diagnostic harness that calls the
+service functions directly with controlled inputs (faster and more deterministic than firing HTTP
+requests, per the brief). No repo files were changed; the one write (a test rating / a constructed
+event) was rolled back.
+
+### Issue #1 — streak resets on Sunday
+Called `update_listening_streak(user, now)` in isolation with a fabricated user:
+- `last_listened_at` = Sat 2026-07-11, `streak` = 12, `now` = **Sun** 2026-07-12 →
+  result streak = **1** (expected 13). Bug reproduces.
+- Control: `last_listened_at` = Sun, `now` = Mon → streak = 13 (correct on non-Sundays).
+- Confirms kenji's report: the reset happens specifically when the update lands on a **Sunday**.
+
+### Issue #2 — "Friends Listening Now" shows people from yesterday
+Gave darius a single listening event **23 hours** ago (calendar day 2026-07-07) and no newer event,
+then called `get_friends_listening_now(nova.id)` at wall-clock 2026-07-08. darius **still appears**,
+because `RECENT_THRESHOLD` is a rolling `timedelta(hours=24)` window rather than "since midnight
+today". Matches nova's report (a friend whose last listen was 11pm the night before still showing at
+9am).
+
+### Issue #4 — rating a shared song creates no notification
+Counted `Notification` rows for the song's sharer (simone) before/after calling
+`rate_song(kenji, "Crown Heights Anthem", 5)`: **before = 0, after = 0**, while the rating row was
+saved (score = 5). No notification of any type is created for the sharer. Matches aaliya's report.
+
+### Issue #5 — the last song in a playlist never shows up
+Playlist "Friday Energy" has **7** rows in `playlist_entries`, but `get_playlist_songs()` returns
+**6**. The missing title is exactly the one at the highest `position` (7 → `Harlem Renaissance`).
+Matches darius's report that the most recently added song is always the hidden one.
+
+### Issue #3 — duplicate search results (could NOT reproduce)
+`search_songs("Anthem")` returns **1** result for "Crown Heights Anthem", even though the underlying
+`outerjoin(song_tags)` produces **3** raw rows (the song has 3 tags). A broad `search_songs("a")`
+matched 13 songs with **zero** duplicated titles. Root cause of the non-repro: SQLAlchemy's legacy
+`Session.query(Song)` de-duplicates single-entity results by primary key before returning them, so
+the fan-out from the tag join is collapsed. The code is *latently* wrong (a join without
+`DISTINCT`), but it does not produce user-visible duplicates in this SQLAlchemy version. Documented
+honestly rather than forcing a fix for a bug I can't trigger.
 
 ---
 
