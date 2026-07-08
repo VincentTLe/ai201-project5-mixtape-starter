@@ -300,3 +300,26 @@ referenced `RECENT_THRESHOLD`. (Uses UTC calendar days, consistent with how the 
 stores and compares timestamps.)
 
 _Fix commit: `fix: scope listening-now feed to today, not a rolling 24h window`_
+
+---
+
+## Regression Tests (stretch)
+
+The starter already ships tests that pin some of these bugs (e.g.
+`tests/test_streaks.py::test_streak_increments_on_sunday` and
+`tests/test_playlists.py::test_playlist_returns_all_songs`), and my fixes turn those green.
+
+For the stretch requirement I wrote **two new test files of my own** covering the two bugs that had
+no existing test:
+
+- **`tests/test_notifications.py`** — `test_rating_a_song_notifies_the_sharer` asserts a
+  `song_rated` notification is created for the sharer when a friend rates their song (catches
+  Issue #4); `test_rating_your_own_song_does_not_notify` pins the self-rating guard.
+- **`tests/test_feed.py`** — `test_listening_now_excludes_yesterday_evening` seeds a friend whose
+  only listen was 23:59:59 *yesterday* and asserts they do **not** appear in the feed (catches
+  Issue #2); `test_listening_now_includes_today` pins the positive case.
+
+I confirmed these are genuine regression tests by temporarily restoring the pre-fix service files
+(`git show <parent>:services/...`) and re-running them: both **failed on the buggy code**
+(`AssertionError: assert 'stale' not in ['fresh', 'stale']`, and 0 notifications created) and
+**pass on the fixed code**. Full suite: **17 passed** (`pytest tests/`).
