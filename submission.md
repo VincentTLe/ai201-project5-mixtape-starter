@@ -240,3 +240,31 @@ unrelated crash when `add_to_playlist` appends a brand-new song — the `playlis
 column is never set — but that is outside the five listed issues and I left it alone.)
 
 _Fix commit: `fix: notify the sharer when their song is rated`_
+
+### Issue #5 — The last song in a playlist never shows up
+
+**How I reproduced it.** Compared the row count in `playlist_entries` for "Friday Energy" against
+what `get_playlist_songs()` returned: **7 stored, 6 returned**. The missing title was always the one
+at the highest `position` (7 → `Harlem Renaissance`). This matches darius's report that the hidden
+song is always the most recently added, and that adding another song "frees" the previous one.
+
+**How I found the root cause.** Followed `GET /playlists/<id>/songs` (`routes/playlists.py`) →
+`playlist_service.get_playlist_songs()`. The query correctly selects all entries and orders them by
+`playlist_entries.position` ascending. But the return line was
+`return [song.to_dict() for song in songs[:-1]]`. The `[:-1]` slice was the smoking gun — it drops
+the final element of an already-position-sorted list, and the function's own docstring says it
+"returns all songs in the playlist", directly contradicting the slice.
+
+**The root cause.** `songs[:-1]` returns every element except the last. Because `songs` is sorted by
+ascending playlist position, "the last" is always the song with the highest position — i.e. the most
+recently added. So the newest song was silently sliced off every time. Adding another song pushes a
+new highest position, which is why the previously-hidden song reappears and the brand-new one takes
+its place as the dropped element.
+
+**My fix and side-effect check.** Changed the return to iterate the full list:
+`return [song.to_dict() for song in songs]`. Verified all three seeded playlists now return their
+full stored count (7/7 each) with position order preserved, a single-song playlist returns 1 (it
+previously returned 0), and an empty playlist still returns 0 with no error. No other code calls
+`get_playlist_songs`, and the ordering/query logic was left unchanged.
+
+_Fix commit: `fix: return every playlist song instead of dropping the last`_
