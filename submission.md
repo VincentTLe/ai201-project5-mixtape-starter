@@ -7,7 +7,40 @@
 
 ## AI Usage
 
-_(Written in Milestone 4 — see bottom of document once bug work is complete.)_
+I used an AI coding assistant (Claude Code) throughout this project, mostly as a **navigation and
+reasoning partner**, and I stayed in control of the process — working one milestone at a time and
+reviewing each step before moving on.
+
+**Codebase orientation (Milestone 1).** I had the AI read every service, route, and model file and
+summarize each module's responsibility, then trace two full call chains (listen → streak, and
+add-to-playlist → notification). I cross-checked its summary against the actual code — the
+route→service delegation pattern and the `playlist_entries.position` detail were things I verified
+by reading `models.py` myself rather than taking on trust.
+
+**Reproduction (Milestone 2).** The AI wrote a small diagnostic harness that called the service
+functions directly with controlled inputs. This is where AI was most clearly useful: it let me
+confirm the *actual* behavior instead of guessing. The most important outcome was a case where the
+AI's first-pass reading was **wrong** — it initially "smelled" a classic `outerjoin`-without-DISTINCT
+duplication bug in search (Issue #3), but when we actually ran the query, SQLAlchemy's legacy
+`Query` de-duplicates single-entity rows by primary key, so `search("Anthem")` returned 1 result,
+not 3. Reading-first would have led me to "fix" a bug that doesn't reproduce. Running the code
+corrected it, and I documented Issue #3 honestly as non-reproducing.
+
+**Debugging & fixes (Milestone 3).** For each bug I asked the AI to trace from the route to the
+service and explain the suspicious function; I then verified the diagnosis by reading the code and
+running before/after checks on both sides of each boundary condition. Concrete AI-assisted moments:
+confirming `datetime.weekday()` returns 6 for Sunday (Issue #1); a line-by-line diff of
+`add_to_playlist` vs `rate_song` that made the missing `create_notification` call obvious
+(Issue #4); and recognizing the difference between a rolling 24h window and a calendar-day cutoff
+(Issue #2). For Issue #1 I had the AI build a side-by-side demo that ran the *exact* pre-fix code
+(loaded from the git blob) against the fixed code on the same data, so I could see the streak go to
+1 vs 13 with my own eyes rather than trust a claim.
+
+**Where I verified or overrode.** I kept fixes minimal and rejected scope creep — e.g. the AI
+noticed a separate pre-existing crash in `add_to_playlist` (the `position` column is never set when
+appending a new song), and I chose to leave it alone and just note it, since it isn't one of the
+five listed issues. Every fix was checked against the existing test suite plus new regression tests,
+and I confirmed the new tests genuinely fail on the pre-fix code before trusting them.
 
 ---
 
